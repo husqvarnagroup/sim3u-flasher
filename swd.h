@@ -42,12 +42,12 @@
 
 typedef struct swd_ctx swd_ctx_t;
 
-/* GPIO pin numbers */
-#define SWD_SWCLK_PIN  36
-#define SWD_SWDIO_PIN  29
-
+/* Host SoC and pins are detected at open time; see gpio.c for the overrides */
 swd_ctx_t *swd_open(void);
 void       swd_close(swd_ctx_t *ctx);
+
+/* "at91sam9x5 SWCLK=PC12 SWDIO=PC11" */
+const char *swd_host(const swd_ctx_t *ctx);
 
 /* SWD connect sequence: line reset + JTAG-to-SWD + read IDCODE */
 int swd_connect(swd_ctx_t *ctx, uint32_t *idcode);

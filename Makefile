@@ -6,7 +6,7 @@ CFLAGS += -Wall -Wextra -Werror -O2 -std=gnu11 -MMD -MP
 TARGET = sim3u-flasher
 OBJDIR = build
 
-SRCS = main.c swd.c sim3u_flash.c
+SRCS = main.c swd.c gpio.c sim3u_flash.c
 OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
 
 .PHONY: all clean

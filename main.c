@@ -19,7 +19,10 @@ static void usage(const char *prog)
         "  -d       debug: dump IDCODE and exit\n"
         "\n"
         "Env:\n"
-        "  SWD_DELAY=N   extra palmbus dummy reads per clock half-period (default 0)\n",
+        "  SWD_DELAY=N   extra dummy register reads per clock half-period (default 0)\n"
+        "  SWD_SOC=NAME  host SoC: mt7688 or at91sam9x5 (default: auto-detect)\n"
+        "  SWD_SWCLK=PIN SWCLK pin, e.g. PC12 or 36 (default: per SoC)\n"
+        "  SWD_SWDIO=PIN SWDIO pin, e.g. PC11 or 29 (default: per SoC)\n",
         prog);
 }
 
@@ -81,6 +84,7 @@ int main(int argc, char **argv)
 
     swd_ctx_t *ctx = swd_open();
     if (!ctx) { free(fw); return 1; }
+    printf("[+] Host: %s\n", swd_host(ctx));
 
     uint32_t idcode = 0;
     if (swd_connect(ctx, &idcode) != 0) {

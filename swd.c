@@ -1,33 +1,18 @@
 #include "swd.h"
 
+#include "gpio.h"
+
 #include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
-/* MT7688 palmbus GPIO */
-#define MT76X8_PALMBUS_PHYS 0x10000000u
-#define MT76X8_PALMBUS_SIZE 0x00100000u
-#define MT76X8_GPIO_OFFSET  0x00000600u
-
-#define MM_CTRL(g, b) ((g)->mm[(0x00u >> 2) + (b)])
-#define MM_DATA(g, b) ((g)->mm[(0x20u >> 2) + (b)])
-#define MM_DSET(g, b) ((g)->mm[(0x30u >> 2) + (b)])
-#define MM_DCLR(g, b) ((g)->mm[(0x40u >> 2) + (b)])
-
-/* Extra dummy palmbus reads per clock half-period (tunable via SWD_DELAY) */
+/* Extra dummy register reads per clock half-period (tunable via SWD_DELAY) */
 static int g_swd_delay = 0;
 
 struct swd_ctx {
-    volatile uint32_t *mm;   /* pointer to GPIO register block */
-    int   clk_bank, clk_bit;
-    uint32_t clk_mask;
-    int   dio_bank, dio_bit;
-    uint32_t dio_mask;
+    gpio_t   io;
     uint8_t  cur_ap;         /* currently selected AP bank in SELECT */
     uint8_t  cur_ap_bank;
 };
@@ -39,55 +24,50 @@ struct swd_ctx {
 static inline void delay_reads(swd_ctx_t *g)
 {
     for (int i = 0; i < g_swd_delay; i++)
-        (void)MM_DATA(g, g->dio_bank);
+        gpio_sync(&g->io.dio);
 }
 
 static inline void swdio_drive(swd_ctx_t *g, int output)
 {
-    if (output)
-        MM_CTRL(g, g->dio_bank) |= g->dio_mask;
-    else
-        MM_CTRL(g, g->dio_bank) &= ~g->dio_mask;
-    (void)MM_DATA(g, g->dio_bank);
+    gpio_dir(&g->io.dio, output);
 }
 
 /* Clock out one bit (MOSI) — SWDIO driven before rising edge */
 static inline void clock_out(swd_ctx_t *g, int bit)
 {
-    if (bit) MM_DSET(g, g->dio_bank) = g->dio_mask;
-    else     MM_DCLR(g, g->dio_bank) = g->dio_mask;
-    (void)MM_DATA(g, g->dio_bank);   /* setup time + write barrier */
+    gpio_put(&g->io.dio, bit);
+    gpio_sync(&g->io.dio);           /* setup time + write barrier */
     delay_reads(g);
-    MM_DSET(g, g->clk_bank) = g->clk_mask;
-    (void)MM_DATA(g, g->clk_bank);   /* high phase */
+    gpio_set(&g->io.clk);
+    gpio_sync(&g->io.clk);           /* high phase */
     delay_reads(g);
-    MM_DCLR(g, g->clk_bank) = g->clk_mask;
+    gpio_clr(&g->io.clk);
 }
 
 /* Clock in one bit (MISO) — sample before rising edge */
 static inline int clock_in(swd_ctx_t *g)
 {
-    (void)MM_DATA(g, g->dio_bank);   /* settle */
+    gpio_sync(&g->io.dio);           /* settle */
     delay_reads(g);
-    int val = (MM_DATA(g, g->dio_bank) >> g->dio_bit) & 1;
-    MM_DSET(g, g->clk_bank) = g->clk_mask;
-    (void)MM_DATA(g, g->clk_bank);
+    int val = gpio_get(&g->io.dio);
+    gpio_set(&g->io.clk);
+    gpio_sync(&g->io.clk);
     delay_reads(g);
-    MM_DCLR(g, g->clk_bank) = g->clk_mask;
+    gpio_clr(&g->io.clk);
     return val;
 }
 
 /* Send N idle clocks (SWDIO=0) */
 static void clock_idle(swd_ctx_t *g, int n)
 {
-    MM_DCLR(g, g->dio_bank) = g->dio_mask;
+    gpio_clr(&g->io.dio);
     for (int i = 0; i < n; i++) {
-        (void)MM_DATA(g, g->dio_bank);
+        gpio_sync(&g->io.dio);
         delay_reads(g);
-        MM_DSET(g, g->clk_bank) = g->clk_mask;
-        (void)MM_DATA(g, g->clk_bank);
+        gpio_set(&g->io.clk);
+        gpio_sync(&g->io.clk);
         delay_reads(g);
-        MM_DCLR(g, g->clk_bank) = g->clk_mask;
+        gpio_clr(&g->io.clk);
     }
 }
 
@@ -371,11 +351,12 @@ static const uint8_t line_reset[] = {
 
 int swd_connect(swd_ctx_t *ctx, uint32_t *idcode)
 {
-    /* Ensure SWCLK starts low, SWDIO high, both outputs */
-    swdio_drive(ctx, 1);
-    MM_CTRL(ctx, ctx->clk_bank) |= ctx->clk_mask;
-    MM_DCLR(ctx, ctx->clk_bank) = ctx->clk_mask;
-    MM_DSET(ctx, ctx->dio_bank) = ctx->dio_mask;
+    /* Ensure SWCLK starts low, SWDIO high — levels first, then drive, so
+       neither line glitches as its output stage is enabled */
+    gpio_clr(&ctx->io.clk);
+    gpio_set(&ctx->io.dio);
+    gpio_dir(&ctx->io.clk, 1);
+    gpio_dir(&ctx->io.dio, 1);
 
     /* JTAG-to-SWD switch sequence */
     send_bits(ctx, jtag_to_swd, 118);
@@ -426,32 +407,13 @@ swd_ctx_t *swd_open(void)
     const char *delay_env = getenv("SWD_DELAY");
     if (delay_env) g_swd_delay = atoi(delay_env);
 
-    int fd = open("/dev/mem", O_RDWR | O_SYNC);
-    if (fd < 0) {
-        perror("open /dev/mem");
-        return NULL;
-    }
-
-    void *base = mmap(NULL, MT76X8_PALMBUS_SIZE, PROT_READ | PROT_WRITE,
-                      MAP_SHARED, fd, MT76X8_PALMBUS_PHYS);
-    close(fd);
-    if (base == MAP_FAILED) {
-        perror("mmap palmbus");
-        return NULL;
-    }
-
     swd_ctx_t *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) { munmap(base, MT76X8_PALMBUS_SIZE); return NULL; }
+    if (!ctx) return NULL;
 
-    ctx->mm = (volatile uint32_t *)((uint8_t *)base + MT76X8_GPIO_OFFSET);
-
-    ctx->clk_bank = SWD_SWCLK_PIN / 32;
-    ctx->clk_bit  = SWD_SWCLK_PIN % 32;
-    ctx->clk_mask = 1u << ctx->clk_bit;
-
-    ctx->dio_bank = SWD_SWDIO_PIN / 32;
-    ctx->dio_bit  = SWD_SWDIO_PIN % 32;
-    ctx->dio_mask = 1u << ctx->dio_bit;
+    if (gpio_open(&ctx->io) != 0) {
+        free(ctx);
+        return NULL;
+    }
 
     ctx->cur_ap      = 0xFF;
     ctx->cur_ap_bank = 0xFF;
@@ -462,11 +424,11 @@ swd_ctx_t *swd_open(void)
 void swd_close(swd_ctx_t *ctx)
 {
     if (!ctx) return;
-    /* CTRL: set both pins back to input */
-    MM_CTRL(ctx, ctx->clk_bank) &= ~ctx->clk_mask;
-    MM_CTRL(ctx, ctx->dio_bank) &= ~ctx->dio_mask;
-    /* munmap: we stored only gpio offset; base = mm - GPIO_OFFSET/4 */
-    uint8_t *base = (uint8_t *)ctx->mm - MT76X8_GPIO_OFFSET;
-    munmap(base, MT76X8_PALMBUS_SIZE);
+    gpio_close(&ctx->io);
     free(ctx);
+}
+
+const char *swd_host(const swd_ctx_t *ctx)
+{
+    return gpio_desc(&ctx->io);
 }
