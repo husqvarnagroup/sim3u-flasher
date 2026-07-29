@@ -39,6 +39,14 @@
 #define DP_ABORT_ALL        (DP_ABORT_STKCMPCLR | DP_ABORT_STKERRCLR | \
                              DP_ABORT_WDERRCLR  | DP_ABORT_ORUNERRCLR)
 
+/* Idle clocks appended to every transfer, letting a posted write retire before
+   the next request starts.  They look like pure overhead (~15% of the bits on
+   the wire) but are not: measured on GARDENA-01c737, dropping 8 to 2 left the
+   mean flash time worse (10.0 s vs 8.8 s over three interleaved runs), because
+   the target takes the time either way and charges it back as WAIT acks, and a
+   retried transfer costs ~54 bit-times against an idle clock's one. */
+#define SWD_IDLE_CLOCKS 8
+
 /* Max WAIT acks to ride out before giving up on a transfer.  A WAIT is the
    target saying "busy", and each retry costs one SWD transfer (tens of us), so
    this is really a time budget: it has to cover the longest stall the target

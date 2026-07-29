@@ -68,6 +68,12 @@ int main(int argc, char **argv)
         }
     }
 
+    if (opt_erase_only && opt_verify_only) {
+        fprintf(stderr, "[!] -e and -v are mutually exclusive\n");
+        return 1;
+    }
+
+    /* -d needs no firmware; anything that touches flash does */
     if (optind >= argc && !opt_debug) {
         usage(argv[0]);
         return 1;
@@ -76,7 +82,7 @@ int main(int argc, char **argv)
     uint8_t  *fw   = NULL;
     uint32_t  size = 0;
 
-    if (optind < argc) {
+    if (optind < argc && !opt_debug) {
         fw = load_file(argv[optind], &size);
         if (!fw) return 1;
         printf("[+] Loaded %u bytes from %s\n", size, argv[optind]);
@@ -86,35 +92,36 @@ int main(int argc, char **argv)
     if (!ctx) { free(fw); return 1; }
     printf("[+] Host: %s\n", swd_host(ctx));
 
+    int ret = -1;
+
     uint32_t idcode = 0;
     if (swd_connect(ctx, &idcode) != 0) {
         fprintf(stderr, "[!] SWD connect failed\n");
-        swd_close(ctx); free(fw); return 1;
+        goto out;
     }
     printf("[+] IDCODE: 0x%08x\n", idcode);
 
     if (idcode != SIM3U_EXPECTED_IDCODE) {
         fprintf(stderr, "[!] Unexpected IDCODE (expected 0x%08x)\n", SIM3U_EXPECTED_IDCODE);
-        swd_close(ctx); free(fw); return 1;
+        goto out;
     }
 
-    if (opt_debug) {
-        swd_close(ctx); free(fw); return 0;
+    if (opt_debug) {          /* IDCODE was the whole point; nothing to clean up */
+        swd_close(ctx);
+        return 0;
     }
 
     printf("[*] Halting CPU...\n");
     if (swd_halt(ctx) != 0) {
         fprintf(stderr, "[!] CPU halt failed\n");
-        swd_close(ctx); free(fw); return 1;
+        goto out;
     }
     printf("[+] CPU halted.\n");
 
     if (sim3u_init(ctx) != 0) {
         fprintf(stderr, "[!] Device init failed\n");
-        swd_close(ctx); free(fw); return 1;
+        goto out;
     }
-
-    int ret = 0;
 
     if (opt_verify_only) {
         ret = sim3u_verify(ctx, fw, size);
@@ -135,9 +142,10 @@ int main(int argc, char **argv)
             printf("[+] CPU running.\n");
     }
 
+    if (ret == 0) printf("[+] Done.\n");
+
+out:
     swd_close(ctx);
     free(fw);
-
-    if (ret == 0) printf("[+] Done.\n");
     return ret ? 1 : 0;
 }

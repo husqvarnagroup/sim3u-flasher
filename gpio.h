@@ -21,6 +21,10 @@ typedef struct {
     int      bit;
     int      dir_rmw;         /* 1: oe == od, a r/w register where 1 = output
                                  0: oe/od are write-1-to-act registers */
+
+    /* Backend bookkeeping, not used in the hot path */
+    volatile uint32_t *port;  /* register block this pin lives in */
+    int      was_muxed;       /* pin was owned by a peripheral at open time */
 } gpio_pin_t;
 
 typedef struct {
@@ -31,9 +35,6 @@ typedef struct {
     const struct gpio_soc *soc;
     void      *map;
     size_t     maplen;
-    volatile uint32_t *clk_port;
-    volatile uint32_t *dio_port;
-    unsigned   restore;
     char       desc[64];
 } gpio_t;
 

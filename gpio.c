@@ -79,6 +79,7 @@ static void mt7688_pin(gpio_pin_t *p, volatile uint32_t *gp, int bank, int bit)
     p->dir_rmw = 1;
     p->bit  = bit;
     p->mask = 1u << bit;
+    p->port = gp;
 }
 
 static int mt7688_open(gpio_t *g, int cb, int cbit, int db, int dbit)
@@ -134,9 +135,6 @@ static void mt7688_close(gpio_t *g)
 /* Peripheral IDs: PIOA/PIOB share 2, PIOC/PIOD share 3 */
 #define AT91_PIO_PID(bank) ((bank) < 2 ? 2u : 3u)
 
-#define RESTORE_CLK_PERIPH  (1u << 0)
-#define RESTORE_DIO_PERIPH  (1u << 1)
-
 static void at91_clk_enable(volatile uint32_t *pmc, int bank)
 {
     uint32_t m = 1u << AT91_PIO_PID(bank);
@@ -146,14 +144,12 @@ static void at91_clk_enable(volatile uint32_t *pmc, int bank)
         pmc[PMC_PCER >> 2] = m;
 }
 
-static void at91_pin(gpio_t *g, gpio_pin_t *p, volatile uint32_t *port,
-                     int bit, unsigned restore_bit)
+static void at91_pin(gpio_pin_t *p, volatile uint32_t *port, int bit)
 {
     uint32_t m = 1u << bit;
 
     /* Remember pins we take from a peripheral so close() can hand them back */
-    if (!(port[PIO_PSR >> 2] & m))
-        g->restore |= restore_bit;
+    p->was_muxed = !(port[PIO_PSR >> 2] & m);
 
     port[PIO_IDR  >> 2] = m;   /* no interrupts */
     port[PIO_IFDR >> 2] = m;   /* no glitch filter — it would eat sampled bits */
@@ -169,6 +165,13 @@ static void at91_pin(gpio_t *g, gpio_pin_t *p, volatile uint32_t *port,
     p->dir_rmw = 0;
     p->bit  = bit;
     p->mask = m;
+    p->port = port;
+}
+
+static volatile uint32_t *at91_port(volatile uint32_t *base, int bank)
+{
+    return (volatile uint32_t *)((uint8_t *)base + AT91_PIOA_OFF +
+                                 (unsigned)bank * AT91_PIO_STRIDE);
 }
 
 static int at91_open(gpio_t *g, int cb, int cbit, int db, int dbit)
@@ -179,28 +182,26 @@ static int at91_open(gpio_t *g, int cb, int cbit, int db, int dbit)
     volatile uint32_t *pmc =
         (volatile uint32_t *)((uint8_t *)base + AT91_PMC_OFF);
 
-    g->clk_port = (volatile uint32_t *)((uint8_t *)base + AT91_PIOA_OFF +
-                                        (unsigned)cb * AT91_PIO_STRIDE);
-    g->dio_port = (volatile uint32_t *)((uint8_t *)base + AT91_PIOA_OFF +
-                                        (unsigned)db * AT91_PIO_STRIDE);
-
     at91_clk_enable(pmc, cb);
     at91_clk_enable(pmc, db);
 
-    at91_pin(g, &g->clk, g->clk_port, cbit, RESTORE_CLK_PERIPH);
-    at91_pin(g, &g->dio, g->dio_port, dbit, RESTORE_DIO_PERIPH);
+    at91_pin(&g->clk, at91_port(base, cb), cbit);
+    at91_pin(&g->dio, at91_port(base, db), dbit);
     return 0;
+}
+
+/* Back to input, and back to the peripheral for pins that were muxed to one */
+static void at91_release(const gpio_pin_t *p)
+{
+    p->port[PIO_ODR >> 2] = p->mask;
+    if (p->was_muxed)
+        p->port[PIO_PDR >> 2] = p->mask;
 }
 
 static void at91_close(gpio_t *g)
 {
-    g->clk_port[PIO_ODR >> 2] = g->clk.mask;
-    g->dio_port[PIO_ODR >> 2] = g->dio.mask;
-
-    if (g->restore & RESTORE_CLK_PERIPH)
-        g->clk_port[PIO_PDR >> 2] = g->clk.mask;
-    if (g->restore & RESTORE_DIO_PERIPH)
-        g->dio_port[PIO_PDR >> 2] = g->dio.mask;
+    at91_release(&g->clk);
+    at91_release(&g->dio);
 }
 
 /* ------------------------------------------------------------------ */

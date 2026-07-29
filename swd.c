@@ -11,10 +11,13 @@
 /* Extra dummy register reads per clock half-period (tunable via SWD_DELAY) */
 static int g_swd_delay = 0;
 
+/* AP 0 is the only AP this tool touches, so DP_SELECT only ever changes the
+   register bank; cache it to skip redundant SELECT writes. */
+#define AP_BANK_NONE 0xFFu
+
 struct swd_ctx {
     gpio_t   io;
-    uint8_t  cur_ap;         /* currently selected AP bank in SELECT */
-    uint8_t  cur_ap_bank;
+    uint8_t  ap_bank;        /* bank currently in DP_SELECT, or AP_BANK_NONE */
 };
 
 /* ------------------------------------------------------------------ */
@@ -32,28 +35,37 @@ static inline void swdio_drive(swd_ctx_t *g, int output)
     gpio_dir(&g->io.dio, output);
 }
 
-/* Clock out one bit (MOSI) — SWDIO driven before rising edge */
-static inline void clock_out(swd_ctx_t *g, int bit)
+/* Setup phase: flush the SWDIO write and hold the level before the edge */
+static inline void swdio_settle(swd_ctx_t *g)
 {
-    gpio_put(&g->io.dio, bit);
-    gpio_sync(&g->io.dio);           /* setup time + write barrier */
+    gpio_sync(&g->io.dio);
     delay_reads(g);
-    gpio_set(&g->io.clk);
-    gpio_sync(&g->io.clk);           /* high phase */
-    delay_reads(g);
-    gpio_clr(&g->io.clk);
 }
 
-/* Clock in one bit (MISO) — sample before rising edge */
-static inline int clock_in(swd_ctx_t *g)
+/* Rising edge, high phase, falling edge — the target samples on the rise, so
+   SWDIO must already be driven (or read) by the caller */
+static inline void clock_pulse(swd_ctx_t *g)
 {
-    gpio_sync(&g->io.dio);           /* settle */
-    delay_reads(g);
-    int val = gpio_get(&g->io.dio);
     gpio_set(&g->io.clk);
     gpio_sync(&g->io.clk);
     delay_reads(g);
     gpio_clr(&g->io.clk);
+}
+
+/* Clock out one bit (MOSI) */
+static inline void clock_out(swd_ctx_t *g, int bit)
+{
+    gpio_put(&g->io.dio, bit);
+    swdio_settle(g);
+    clock_pulse(g);
+}
+
+/* Clock in one bit (MISO) — sample before the rising edge */
+static inline int clock_in(swd_ctx_t *g)
+{
+    swdio_settle(g);
+    int val = gpio_get(&g->io.dio);
+    clock_pulse(g);
     return val;
 }
 
@@ -62,12 +74,8 @@ static void clock_idle(swd_ctx_t *g, int n)
 {
     gpio_clr(&g->io.dio);
     for (int i = 0; i < n; i++) {
-        gpio_sync(&g->io.dio);
-        delay_reads(g);
-        gpio_set(&g->io.clk);
-        gpio_sync(&g->io.clk);
-        delay_reads(g);
-        gpio_clr(&g->io.clk);
+        swdio_settle(g);
+        clock_pulse(g);
     }
 }
 
@@ -170,7 +178,7 @@ static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
     }
 
     /* Idle clocks after transfer */
-    clock_idle(ctx, 8);
+    clock_idle(ctx, SWD_IDLE_CLOCKS);
     return ack;
 }
 
@@ -220,18 +228,16 @@ int swd_dp_write(swd_ctx_t *ctx, uint8_t addr, uint32_t data)
 /* AP register access                                                  */
 /* ------------------------------------------------------------------ */
 
-/* Select AP 0, bank matching addr[7:4] */
+/* Point DP_SELECT at the bank holding addr[7:4] of AP 0 */
 static int ap_select(swd_ctx_t *ctx, uint8_t addr)
 {
     uint8_t bank = addr & 0xF0u;
-    if (ctx->cur_ap == 0 && ctx->cur_ap_bank == bank)
+    if (ctx->ap_bank == bank)
         return 0;
-    int r = swd_dp_write(ctx, DP_SELECT, (uint32_t)bank);
-    if (r == 0) {
-        ctx->cur_ap = 0;
-        ctx->cur_ap_bank = bank;
-    }
-    return r;
+    if (swd_dp_write(ctx, DP_SELECT, bank) != 0)
+        return -1;
+    ctx->ap_bank = bank;
+    return 0;
 }
 
 static int ap_read(swd_ctx_t *ctx, uint8_t addr, uint32_t *data)
@@ -425,9 +431,8 @@ int swd_connect(swd_ctx_t *ctx, uint32_t *idcode)
         return -1;
     }
 
-    /* Set up MEM-AP CSW */
-    ctx->cur_ap = 0xFF;
-    ctx->cur_ap_bank = 0xFF;
+    /* The line reset above zeroed DP_SELECT in the DP, so drop the cache */
+    ctx->ap_bank = AP_BANK_NONE;
     return memap_setup(ctx);
 }
 
@@ -448,9 +453,7 @@ swd_ctx_t *swd_open(void)
         return NULL;
     }
 
-    ctx->cur_ap      = 0xFF;
-    ctx->cur_ap_bank = 0xFF;
-
+    ctx->ap_bank = AP_BANK_NONE;
     return ctx;
 }
 
