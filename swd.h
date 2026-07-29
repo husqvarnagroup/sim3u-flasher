@@ -28,6 +28,8 @@
 
 /* MEM-AP CSW: 32-bit word transfers, auto-increment */
 #define AP_CSW_VAL  0x23000052u
+/* Same, with address auto-increment off (repeated access to one register) */
+#define AP_CSW_VAL_NOINC 0x23000042u
 
 /* ABORT register bits */
 #define DP_ABORT_STKCMPCLR  (1u << 1)
@@ -37,8 +39,13 @@
 #define DP_ABORT_ALL        (DP_ABORT_STKCMPCLR | DP_ABORT_STKERRCLR | \
                              DP_ABORT_WDERRCLR  | DP_ABORT_ORUNERRCLR)
 
-/* SWD max WAIT retries */
-#define SWD_WAIT_RETRIES  10
+/* Max WAIT acks to ride out before giving up on a transfer.  A WAIT is the
+   target saying "busy", and each retry costs one SWD transfer (tens of us), so
+   this is really a time budget: it has to cover the longest stall the target
+   can produce, which is a flash halfword program on a module still running the
+   slow post-reset clock.  Ten retries only ever worked against a module that
+   was already executing firmware and had clocked itself up. */
+#define SWD_WAIT_RETRIES  100000
 
 typedef struct swd_ctx swd_ctx_t;
 
@@ -63,6 +70,10 @@ int swd_mem_write32(swd_ctx_t *ctx, uint32_t addr, uint32_t data);
 /* Sequential word block read (TAR auto-increment + pipelined DRW reads) */
 int swd_mem_read_block(swd_ctx_t *ctx, uint32_t addr, uint32_t *buf,
                        uint32_t count);
+
+/* Repeated writes to one address (TAR set once, auto-increment off) */
+int swd_mem_write_fixed(swd_ctx_t *ctx, uint32_t addr, const uint32_t *vals,
+                        uint32_t count);
 
 /* Halt/resume CPU via DHCSR */
 int swd_halt(swd_ctx_t *ctx);

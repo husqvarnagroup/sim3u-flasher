@@ -88,22 +88,34 @@ int sim3u_write(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
     if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_INITIAL) != 0) return -1;
     if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_MULTIPLE) != 0) return -1;
 
+    /* WRADDR is written once: in multiple-write mode the controller
+       auto-increments it after every WRDATA write. */
+    if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, SIM3U_FLASH_BASE) != 0) return -1;
+
+    enum { WRITE_CHUNK_HW = 256 };
+    uint32_t chunk[WRITE_CHUNK_HW];
+
     int ret = 0;
-    for (uint32_t i = 0; i < hw_count; i++) {
-        uint16_t hw;
-        if (2 * i + 1 < size)
-            hw = (uint16_t)(data[2 * i]) | ((uint16_t)(data[2 * i + 1]) << 8);
-        else
-            hw = (uint16_t)(data[2 * i]) | 0xFF00u;
+    for (uint32_t i = 0; i < hw_count; i += WRITE_CHUNK_HW) {
+        uint32_t n = hw_count - i;
+        if (n > WRITE_CHUNK_HW) n = WRITE_CHUNK_HW;
 
-        if (flash_busy_wait(ctx) != 0) { ret = -1; break; }
+        for (uint32_t j = 0; j < n; j++) {
+            uint32_t k = i + j;
+            chunk[j] = (2 * k + 1 < size)
+                ? (uint32_t)data[2 * k] | ((uint32_t)data[2 * k + 1] << 8)
+                : (uint32_t)data[2 * k] | 0xFF00u;
+        }
 
-        uint32_t target_addr = SIM3U_FLASH_BASE + i * 2;
-        if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, target_addr) != 0) { ret = -1; break; }
-        if (swd_mem_write32(ctx, SIM3U_FLASH_WRDATA, hw) != 0) { ret = -1; break; }
+        /* The flash controller holds the bus while a halfword programs, so
+           the stream is throttled by SWD WAIT acks, not by polling BUSYF. */
+        if (swd_mem_write_fixed(ctx, SIM3U_FLASH_WRDATA, chunk, n) != 0) {
+            ret = -1;
+            break;
+        }
 
-        if ((i & 0xFF) == 0xFF)
-            printf("  written %u / %u bytes\r", (i + 1) * 2, size);
+        printf("  written %u / %u bytes\r", (i + n) * 2, size);
+        fflush(stdout);
     }
 
     if (ret == 0) ret = flash_busy_wait(ctx);

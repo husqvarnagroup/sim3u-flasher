@@ -306,6 +306,39 @@ int swd_mem_read_block(swd_ctx_t *ctx, uint32_t addr, uint32_t *buf,
     return 0;
 }
 
+/* Stream values into a single address: CSW auto-increment off so every DRW
+   write lands on the same register, one TAR write, then back-to-back writes
+   with no address phase in between.  A WAIT ack is the target's backpressure
+   and swd_transfer_retry rides it out, so a slow slave throttles the stream
+   instead of losing data.  RDBUFF at the end waits for the last posted write
+   to retire before the caller assumes it happened. */
+int swd_mem_write_fixed(swd_ctx_t *ctx, uint32_t addr, const uint32_t *vals,
+                        uint32_t count)
+{
+    int ret = -1;
+
+    if (ap_write(ctx, AP_CSW, AP_CSW_VAL_NOINC) != 0) goto out;
+    if (ap_write(ctx, AP_TAR, addr) != 0) goto out;
+    if (ap_select(ctx, AP_DRW) != 0) goto out;
+
+    uint8_t req = swd_request(1, 0, AP_DRW & 0x0Cu);
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t val = vals[i];
+        if (swd_transfer_retry(ctx, req, 1, &val, "AP fixed write") != 0)
+            goto out;
+    }
+
+    uint32_t flush;
+    if (swd_dp_read(ctx, DP_RDBUFF, &flush) != 0) goto out;
+
+    ret = 0;
+
+out:
+    /* Leave the AP in the auto-increment mode every other caller expects */
+    if (ap_write(ctx, AP_CSW, AP_CSW_VAL) != 0) ret = -1;
+    return ret;
+}
+
 /* ------------------------------------------------------------------ */
 /* Halt / run                                                          */
 /* ------------------------------------------------------------------ */
