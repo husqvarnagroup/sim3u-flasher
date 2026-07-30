@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: GARDENA GmbH
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+name: CI
+
+on: pull_request
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format clang-tidy
+
+      - name: Check formatting and run clang-tidy
+        run: make check
+
+  reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check REUSE compliance
+        uses: fsfe/reuse-action@v6
