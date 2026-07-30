@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: GARDENA GmbH
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
 #include <errno.h>
 #include <getopt.h>
 #include <stdint.h>

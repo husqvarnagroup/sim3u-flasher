@@ -1,0 +1,6 @@
+version = 1
+
+[[annotations]]
+path = ".gitignore"
+SPDX-FileCopyrightText = "GARDENA GmbH"
+SPDX-License-Identifier = "GPL-2.0-or-later"
