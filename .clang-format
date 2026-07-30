@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: GARDENA GmbH
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+---
+BasedOnStyle: LLVM
+Language: Cpp
+
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 80
+
+BreakBeforeBraces: Linux
+
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+AlignConsecutiveDeclarations: None
+AlignConsecutiveAssignments: None
+AlignConsecutiveMacros: None
+AlignTrailingComments: false
+AlignEscapedNewlines: Left
+
+IndentCaseLabels: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+InsertBraces: true
+
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpaceAfterCStyleCast: false
+
+SortIncludes: false
+IncludeBlocks: Preserve
+
+ForEachMacros: []

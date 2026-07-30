@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: GARDENA GmbH
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+---
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  misc-*,
+  performance-*,
+  readability-*,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-isolate-declaration,
+  -misc-include-cleaner,
+  -readability-uppercase-literal-suffix,
+  -readability-math-missing-parentheses,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-narrowing-conversions,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-unix.Errno
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*\.h$'
+FormatStyle: file
+
+# Disabled above, and why:
+#   uppercase-literal-suffix   the sources consistently write 0x0Cu, not 0x0CU
+#   math-missing-parentheses   wants (2 * k) + 1; plain precedence is clear enough
+#   easily-swappable-params    inherent to the (ctx, addr, data) register calls
+#   implicit-widening-of-mult  offsets are bounded by the 256K image and bank count
+#   narrowing-conversions      flags `val & 1` returned as int, which cannot narrow
+#   insecureAPI.Deprecated...  wants C11 Annex K (fprintf_s), absent from glibc
+#   unix.Errno                 flags errno left unchecked where the result is not
+#                              an errno-carrying failure
+
+CheckOptions:
+  # Everything is lower_case; only macros shout. lower_case rejects camelCase
+  # outright, so no separate rule is needed to ban it.
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.ConstantParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.PointerParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalFunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.StructCase
+    value: lower_case
+  - key: readability-identifier-naming.UnionCase
+    value: lower_case
+  - key: readability-identifier-naming.EnumCase
+    value: lower_case
+  - key: readability-identifier-naming.TypedefCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  # Macros and enum constants are the one exception: SIM3U_FLASH_PAGE_SIZE
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+  # ...bar the feature-test macro, whose leading underscore POSIX mandates
+  - key: readability-identifier-naming.MacroDefinitionIgnoredRegexp
+    value: _FILE_OFFSET_BITS
+  - key: readability-identifier-naming.EnumConstantCase
+    value: UPPER_CASE
+  # main() sits at 36: a flat sequence of option handling, not nesting
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 40
+  # POSIX mandates the leading underscore on this feature-test macro
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: _FILE_OFFSET_BITS
