@@ -41,9 +41,17 @@ static uint8_t *load_file(const char *path, uint32_t *size_out)
         perror(path);
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        perror(path);
+        fclose(f);
+        return NULL;
+    }
     long sz = ftell(f);
-    rewind(f);
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        perror(path);
+        fclose(f);
+        return NULL;
+    }
     if (sz <= 0 || sz > (long)SIM3U_FLASH_SIZE_256K) {
         fprintf(stderr, "[!] File size %ld out of range\n", sz);
         fclose(f);
