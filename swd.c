@@ -22,18 +22,19 @@ static int g_swd_delay = 0;
 #define AP_BANK_NONE 0xFFu
 
 struct swd_ctx {
-    gpio_t   io;
-    uint8_t  ap_bank;        /* bank currently in DP_SELECT, or AP_BANK_NONE */
+    gpio_t io;
+    uint8_t ap_bank; /* bank currently in DP_SELECT, or AP_BANK_NONE */
 };
 
-/* ------------------------------------------------------------------ */
-/* Low-level GPIO bit-bang                                             */
-/* ------------------------------------------------------------------ */
+/*
+ * Low-level GPIO bit-bang
+ */
 
 static inline void delay_reads(swd_ctx_t *g)
 {
-    for (int i = 0; i < g_swd_delay; i++)
+    for (int i = 0; i < g_swd_delay; i++) {
         gpio_sync(&g->io.dio);
+    }
 }
 
 static inline void swdio_drive(swd_ctx_t *g, int output)
@@ -88,8 +89,9 @@ static void clock_idle(swd_ctx_t *g, int n)
 /* Send N bits LSB-first from a byte array */
 static void send_bits(swd_ctx_t *g, const uint8_t *data, int n)
 {
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
         clock_out(g, (data[i / 8] >> (i % 8)) & 1);
+    }
 }
 
 /* Send 32-bit word LSB-first */
@@ -105,38 +107,48 @@ static void send_word(swd_ctx_t *g, uint32_t val)
 static uint32_t recv_word(swd_ctx_t *g)
 {
     uint32_t val = 0;
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 32; i++) {
         val |= (uint32_t)clock_in(g) << i;
+    }
     return val;
 }
 
 static int parity32(uint32_t v)
 {
-    v ^= v >> 16; v ^= v >> 8; v ^= v >> 4;
-    v ^= v >> 2;  v ^= v >> 1;
+    v ^= v >> 16;
+    v ^= v >> 8;
+    v ^= v >> 4;
+    v ^= v >> 2;
+    v ^= v >> 1;
     return v & 1;
 }
 
-/* ------------------------------------------------------------------ */
-/* SWD request byte                                                    */
-/* ------------------------------------------------------------------ */
-/* APnDP: 0=DP 1=AP, RnW: 0=write 1=read, addr: register addr A[3:2] */
-static uint8_t swd_request(int APnDP, int RnW, uint8_t addr)
+/*
+ * SWD request byte
+ */
+/* apndp: 0=DP 1=AP, rnw: 0=write 1=read, addr: register addr A[3:2] */
+static uint8_t swd_request(int apndp, int rnw, uint8_t addr)
 {
-    uint8_t req = 0x81u;  /* START=1, STOP=0, PARK=1 */
-    if (APnDP) req |= (1u << 1);
-    if (RnW)   req |= (1u << 2);
+    uint8_t req = 0x81u; /* START=1, STOP=0, PARK=1 */
+    if (apndp) {
+        req |= (1u << 1);
+    }
+    if (rnw) {
+        req |= (1u << 2);
+    }
     req |= ((addr & 0x04u) ? (1u << 3) : 0);
     req |= ((addr & 0x08u) ? (1u << 4) : 0);
-    /* parity over APnDP, RnW, A[3:2] */
-    int p = APnDP ^ RnW ^ ((addr >> 2) & 1) ^ ((addr >> 3) & 1);
-    if (p) req |= (1u << 5);
+    /* parity over apndp, rnw, A[3:2] */
+    int p = apndp ^ rnw ^ ((addr >> 2) & 1) ^ ((addr >> 3) & 1);
+    if (p) {
+        req |= (1u << 5);
+    }
     return req;
 }
 
-/* ------------------------------------------------------------------ */
-/* SWD transaction                                                     */
-/* ------------------------------------------------------------------ */
+/*
+ * SWD transaction
+ */
 
 /* Returns SWD_ACK_OK / SWD_ACK_WAIT / SWD_ACK_FAULT, or -1 on parity error */
 static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
@@ -149,12 +161,13 @@ static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
 
     /* Turnaround: host releases SWDIO */
     swdio_drive(ctx, 0);
-    clock_in(ctx);  /* 1 turnaround clock */
+    clock_in(ctx); /* 1 turnaround clock */
 
     /* Read 3-bit ACK (LSB first) */
     int ack = 0;
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++) {
         ack |= clock_in(ctx) << i;
+    }
 
     if (ack == SWD_ACK_OK) {
         if (!write) {
@@ -163,7 +176,7 @@ static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
             int par = clock_in(ctx);
             /* Turnaround back to MOSI */
             swdio_drive(ctx, 1);
-            clock_out(ctx, 0);  /* 1 turnaround clock, SWDIO=0 */
+            clock_out(ctx, 0); /* 1 turnaround clock, SWDIO=0 */
             if (par != parity32(val)) {
                 fprintf(stderr, "[!] SWD parity error on read\n");
                 return -1;
@@ -172,7 +185,7 @@ static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
         } else {
             /* Write: turnaround back to MOSI, then send data + parity */
             swdio_drive(ctx, 1);
-            clock_out(ctx, 0);  /* 1 turnaround clock, SWDIO=0 */
+            clock_out(ctx, 0); /* 1 turnaround clock, SWDIO=0 */
             send_word(ctx, *data);
             clock_out(ctx, parity32(*data));
         }
@@ -180,7 +193,7 @@ static int swd_transfer(swd_ctx_t *ctx, uint8_t req, int write, uint32_t *data)
         /* WAIT or FAULT: overrun detection is disabled, so there is no
            data phase — just turn the bus around back to MOSI */
         swdio_drive(ctx, 1);
-        clock_out(ctx, 0);  /* 1 turnaround clock, SWDIO=0 */
+        clock_out(ctx, 0); /* 1 turnaround clock, SWDIO=0 */
     }
 
     /* Idle clocks after transfer */
@@ -204,9 +217,15 @@ static int swd_transfer_retry(swd_ctx_t *ctx, uint8_t req, int write,
 {
     for (int retry = 0; retry < SWD_WAIT_RETRIES; retry++) {
         int ack = swd_transfer(ctx, req, write, data);
-        if (ack == SWD_ACK_OK)   return 0;
-        if (ack == SWD_ACK_WAIT) continue;
-        if (ack == SWD_ACK_FAULT) swd_clear_errors(ctx);
+        if (ack == SWD_ACK_OK) {
+            return 0;
+        }
+        if (ack == SWD_ACK_WAIT) {
+            continue;
+        }
+        if (ack == SWD_ACK_FAULT) {
+            swd_clear_errors(ctx);
+        }
         fprintf(stderr, "[!] %s (req=0x%02x) ack=%d\n", what, req, ack);
         return -1;
     }
@@ -214,9 +233,9 @@ static int swd_transfer_retry(swd_ctx_t *ctx, uint8_t req, int write,
     return -1;
 }
 
-/* ------------------------------------------------------------------ */
-/* DP register access                                                  */
-/* ------------------------------------------------------------------ */
+/*
+ * DP register access
+ */
 
 int swd_dp_read(swd_ctx_t *ctx, uint8_t addr, uint32_t *data)
 {
@@ -230,41 +249,49 @@ int swd_dp_write(swd_ctx_t *ctx, uint8_t addr, uint32_t data)
     return swd_transfer_retry(ctx, req, 1, &data, "DP write");
 }
 
-/* ------------------------------------------------------------------ */
-/* AP register access                                                  */
-/* ------------------------------------------------------------------ */
+/*
+ * AP register access
+ */
 
 /* Point DP_SELECT at the bank holding addr[7:4] of AP 0 */
 static int ap_select(swd_ctx_t *ctx, uint8_t addr)
 {
     uint8_t bank = addr & 0xF0u;
-    if (ctx->ap_bank == bank)
+    if (ctx->ap_bank == bank) {
         return 0;
-    if (swd_dp_write(ctx, DP_SELECT, bank) != 0)
+    }
+    if (swd_dp_write(ctx, DP_SELECT, bank) != 0) {
         return -1;
+    }
     ctx->ap_bank = bank;
     return 0;
 }
 
 static int ap_read(swd_ctx_t *ctx, uint8_t addr, uint32_t *data)
 {
-    if (ap_select(ctx, addr) != 0) return -1;
+    if (ap_select(ctx, addr) != 0) {
+        return -1;
+    }
     uint8_t req = swd_request(1, 1, addr & 0x0Cu);
-    if (swd_transfer_retry(ctx, req, 0, data, "AP read") != 0) return -1;
+    if (swd_transfer_retry(ctx, req, 0, data, "AP read") != 0) {
+        return -1;
+    }
     /* AP read returns posted result; read RDBUFF for actual value */
     return swd_dp_read(ctx, DP_RDBUFF, data);
 }
 
 static int ap_write(swd_ctx_t *ctx, uint8_t addr, uint32_t data)
 {
-    if (ap_select(ctx, addr) != 0) return -1;
+    if (ap_select(ctx, addr) != 0) {
+        return -1;
+    }
     uint8_t req = swd_request(1, 0, addr & 0x0Cu);
     return swd_transfer_retry(ctx, req, 1, &data, "AP write");
 }
 
-/* ------------------------------------------------------------------ */
-/* MEM-AP memory access                                                */
-/* ------------------------------------------------------------------ */
+/*
+ * MEM-AP memory access
+ */
 
 static int memap_setup(swd_ctx_t *ctx)
 {
@@ -274,13 +301,17 @@ static int memap_setup(swd_ctx_t *ctx)
 
 int swd_mem_write32(swd_ctx_t *ctx, uint32_t addr, uint32_t data)
 {
-    if (ap_write(ctx, AP_TAR, addr) != 0) return -1;
+    if (ap_write(ctx, AP_TAR, addr) != 0) {
+        return -1;
+    }
     return ap_write(ctx, AP_DRW, data);
 }
 
 int swd_mem_read32(swd_ctx_t *ctx, uint32_t addr, uint32_t *data)
 {
-    if (ap_write(ctx, AP_TAR, addr) != 0) return -1;
+    if (ap_write(ctx, AP_TAR, addr) != 0) {
+        return -1;
+    }
     return ap_read(ctx, AP_DRW, data);
 }
 
@@ -294,22 +325,32 @@ int swd_mem_read_block(swd_ctx_t *ctx, uint32_t addr, uint32_t *buf,
     uint32_t done = 0;
     while (done < count) {
         uint32_t chunk = (0x400u - (addr & 0x3FFu)) / 4;
-        if (chunk > count - done) chunk = count - done;
+        if (chunk > count - done) {
+            chunk = count - done;
+        }
 
-        if (ap_write(ctx, AP_TAR, addr) != 0) return -1;
-        if (ap_select(ctx, AP_DRW) != 0) return -1;
+        if (ap_write(ctx, AP_TAR, addr) != 0) {
+            return -1;
+        }
+        if (ap_select(ctx, AP_DRW) != 0) {
+            return -1;
+        }
 
         uint8_t req = swd_request(1, 1, AP_DRW & 0x0Cu);
         uint32_t val;
         /* First DRW read is posted; its value arrives with the next read */
-        if (swd_transfer_retry(ctx, req, 0, &val, "AP block read") != 0)
+        if (swd_transfer_retry(ctx, req, 0, &val, "AP block read") != 0) {
             return -1;
+        }
         for (uint32_t i = 1; i < chunk; i++) {
-            if (swd_transfer_retry(ctx, req, 0, &val, "AP block read") != 0)
+            if (swd_transfer_retry(ctx, req, 0, &val, "AP block read") != 0) {
                 return -1;
+            }
             buf[done + i - 1] = val;
         }
-        if (swd_dp_read(ctx, DP_RDBUFF, &val) != 0) return -1;
+        if (swd_dp_read(ctx, DP_RDBUFF, &val) != 0) {
+            return -1;
+        }
         buf[done + chunk - 1] = val;
 
         done += chunk;
@@ -329,46 +370,63 @@ int swd_mem_write_fixed(swd_ctx_t *ctx, uint32_t addr, const uint32_t *vals,
 {
     int ret = -1;
 
-    if (ap_write(ctx, AP_CSW, AP_CSW_VAL_NOINC) != 0) goto out;
-    if (ap_write(ctx, AP_TAR, addr) != 0) goto out;
-    if (ap_select(ctx, AP_DRW) != 0) goto out;
+    if (ap_write(ctx, AP_CSW, AP_CSW_VAL_NOINC) != 0) {
+        goto out;
+    }
+    if (ap_write(ctx, AP_TAR, addr) != 0) {
+        goto out;
+    }
+    if (ap_select(ctx, AP_DRW) != 0) {
+        goto out;
+    }
 
     uint8_t req = swd_request(1, 0, AP_DRW & 0x0Cu);
     for (uint32_t i = 0; i < count; i++) {
         uint32_t val = vals[i];
-        if (swd_transfer_retry(ctx, req, 1, &val, "AP fixed write") != 0)
+        if (swd_transfer_retry(ctx, req, 1, &val, "AP fixed write") != 0) {
             goto out;
+        }
     }
 
     uint32_t flush;
-    if (swd_dp_read(ctx, DP_RDBUFF, &flush) != 0) goto out;
+    if (swd_dp_read(ctx, DP_RDBUFF, &flush) != 0) {
+        goto out;
+    }
 
     ret = 0;
 
 out:
     /* Leave the AP in the auto-increment mode every other caller expects */
-    if (ap_write(ctx, AP_CSW, AP_CSW_VAL) != 0) ret = -1;
+    if (ap_write(ctx, AP_CSW, AP_CSW_VAL) != 0) {
+        ret = -1;
+    }
     return ret;
 }
 
-/* ------------------------------------------------------------------ */
-/* Halt / run                                                          */
-/* ------------------------------------------------------------------ */
+/*
+ * Halt / run
+ */
 
-#define DHCSR       0xE000EDF0u
-#define DHCSR_DBGKEY    0xA05F0000u
+#define DHCSR 0xE000EDF0u
+#define DHCSR_DBGKEY 0xA05F0000u
 #define DHCSR_C_DEBUGEN (1u << 0)
-#define DHCSR_C_HALT    (1u << 1)
-#define DHCSR_S_HALT    (1u << 17)
+#define DHCSR_C_HALT (1u << 1)
+#define DHCSR_S_HALT (1u << 17)
 
 int swd_halt(swd_ctx_t *ctx)
 {
     uint32_t val = DHCSR_DBGKEY | DHCSR_C_DEBUGEN | DHCSR_C_HALT;
-    if (swd_mem_write32(ctx, DHCSR, val) != 0) return -1;
+    if (swd_mem_write32(ctx, DHCSR, val) != 0) {
+        return -1;
+    }
     for (int i = 0; i < 100; i++) {
         uint32_t stat;
-        if (swd_mem_read32(ctx, DHCSR, &stat) != 0) return -1;
-        if (stat & DHCSR_S_HALT) return 0;
+        if (swd_mem_read32(ctx, DHCSR, &stat) != 0) {
+            return -1;
+        }
+        if (stat & DHCSR_S_HALT) {
+            return 0;
+        }
     }
     fprintf(stderr, "[!] CPU halt timeout\n");
     return -1;
@@ -380,9 +438,9 @@ int swd_run(swd_ctx_t *ctx)
     return swd_mem_write32(ctx, DHCSR, val);
 }
 
-/* ------------------------------------------------------------------ */
-/* Connect sequence                                                    */
-/* ------------------------------------------------------------------ */
+/*
+ * Connect sequence
+ */
 
 /* 118-bit JTAG-to-SWD sequence (from OpenOCD swd.h) */
 static const uint8_t jtag_to_swd[] = {
@@ -413,20 +471,24 @@ int swd_connect(swd_ctx_t *ctx, uint32_t *idcode)
     /* Read IDCODE (first DP read after connect) */
     uint8_t req = swd_request(0, 1, DP_IDCODE);
     uint32_t id = 0;
-    if (swd_transfer_retry(ctx, req, 0, &id, "IDCODE read") != 0)
+    if (swd_transfer_retry(ctx, req, 0, &id, "IDCODE read") != 0) {
         return -1;
+    }
     *idcode = id;
 
     /* Power up debug + system domains */
     if (swd_dp_write(ctx, DP_CTRL,
-            DP_CTRL_CDBGPWRUPREQ | DP_CTRL_CSYSPWRUPREQ) != 0)
+                     DP_CTRL_CDBGPWRUPREQ | DP_CTRL_CSYSPWRUPREQ) != 0) {
         return -1;
+    }
     uint32_t ctrl = 0;
     int powered = 0;
     for (int i = 0; i < 100; i++) {
-        if (swd_dp_read(ctx, DP_CTRL, &ctrl) != 0) return -1;
+        if (swd_dp_read(ctx, DP_CTRL, &ctrl) != 0) {
+            return -1;
+        }
         if ((ctrl & (DP_CTRL_CDBGPWRUPACK | DP_CTRL_CSYSPWRUPACK)) ==
-                    (DP_CTRL_CDBGPWRUPACK | DP_CTRL_CSYSPWRUPACK)) {
+            (DP_CTRL_CDBGPWRUPACK | DP_CTRL_CSYSPWRUPACK)) {
             powered = 1;
             break;
         }
@@ -442,17 +504,21 @@ int swd_connect(swd_ctx_t *ctx, uint32_t *idcode)
     return memap_setup(ctx);
 }
 
-/* ------------------------------------------------------------------ */
-/* Open / close                                                        */
-/* ------------------------------------------------------------------ */
+/*
+ * Open / close
+ */
 
 swd_ctx_t *swd_open(void)
 {
     const char *delay_env = getenv("SWD_DELAY");
-    if (delay_env) g_swd_delay = atoi(delay_env);
+    if (delay_env) {
+        g_swd_delay = atoi(delay_env);
+    }
 
     swd_ctx_t *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) return NULL;
+    if (!ctx) {
+        return NULL;
+    }
 
     if (gpio_open(&ctx->io) != 0) {
         free(ctx);
@@ -465,7 +531,9 @@ swd_ctx_t *swd_open(void)
 
 void swd_close(swd_ctx_t *ctx)
 {
-    if (!ctx) return;
+    if (!ctx) {
+        return;
+    }
     gpio_close(&ctx->io);
     free(ctx);
 }

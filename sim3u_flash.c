@@ -14,8 +14,12 @@ static int flash_busy_wait(swd_ctx_t *ctx)
 {
     for (int i = 0; i < SIM3U_FLASH_BUSY_TIMEOUT; i++) {
         uint32_t cfg;
-        if (swd_mem_read32(ctx, SIM3U_FLASH_CONFIG_ALL, &cfg) != 0) return -1;
-        if (!(cfg & SIM3U_FLASH_CONFIG_BUSYF)) return 0;
+        if (swd_mem_read32(ctx, SIM3U_FLASH_CONFIG_ALL, &cfg) != 0) {
+            return -1;
+        }
+        if (!(cfg & SIM3U_FLASH_CONFIG_BUSYF)) {
+            return 0;
+        }
     }
     fprintf(stderr, "[!] Flash busy timeout\n");
     return -1;
@@ -24,15 +28,28 @@ static int flash_busy_wait(swd_ctx_t *ctx)
 int sim3u_init(swd_ctx_t *ctx)
 {
     /* Disable watchdog */
-    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_WDTKEY, SIM3U_WDTIMER0_KEY1) != 0) return -1;
-    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_WDTKEY, SIM3U_WDTIMER0_KEY2) != 0) return -1;
-    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_CONTROL_SET, SIM3U_WDTIMER0_DBGMD) != 0) return -1;
+    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_WDTKEY, SIM3U_WDTIMER0_KEY1) != 0) {
+        return -1;
+    }
+    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_WDTKEY, SIM3U_WDTIMER0_KEY2) != 0) {
+        return -1;
+    }
+    if (swd_mem_write32(ctx, SIM3U_WDTIMER0_CONTROL_SET,
+                        SIM3U_WDTIMER0_DBGMD) != 0) {
+        return -1;
+    }
 
     /* Enable flash controller clock */
-    if (swd_mem_write32(ctx, SIM3U_CLKCTRL0_APBCLKG0_SET, SIM3U_CLKCTRL0_FLCTRLCEN) != 0) return -1;
+    if (swd_mem_write32(ctx, SIM3U_CLKCTRL0_APBCLKG0_SET,
+                        SIM3U_CLKCTRL0_FLCTRLCEN) != 0) {
+        return -1;
+    }
 
     /* Ensure erase mode is cleared */
-    if (swd_mem_write32(ctx, SIM3U_FLASH_CONFIG_CLR, SIM3U_FLASH_CONFIG_ERASEEN) != 0) return -1;
+    if (swd_mem_write32(ctx, SIM3U_FLASH_CONFIG_CLR,
+                        SIM3U_FLASH_CONFIG_ERASEEN) != 0) {
+        return -1;
+    }
 
     return 0;
 }
@@ -41,36 +58,54 @@ static int erase_page(swd_ctx_t *ctx, uint32_t addr)
 {
     int ret = -1;
 
-    if (flash_busy_wait(ctx) != 0) return -1;
+    if (flash_busy_wait(ctx) != 0) {
+        return -1;
+    }
 
-    if (swd_mem_write32(ctx, SIM3U_FLASH_CONFIG_SET, SIM3U_FLASH_CONFIG_ERASEEN) != 0) goto out;
-    if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, addr) != 0) goto out;
-    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_INITIAL) != 0) goto out;
-    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_SINGLE) != 0) goto out;
+    if (swd_mem_write32(ctx, SIM3U_FLASH_CONFIG_SET,
+                        SIM3U_FLASH_CONFIG_ERASEEN) != 0) {
+        goto out;
+    }
+    if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, addr) != 0) {
+        goto out;
+    }
+    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_INITIAL) != 0) {
+        goto out;
+    }
+    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_SINGLE) != 0) {
+        goto out;
+    }
     /* Writing any value to WRDATA triggers the erase */
-    if (swd_mem_write32(ctx, SIM3U_FLASH_WRDATA, 0x00000000u) != 0) goto out;
-    if (flash_busy_wait(ctx) != 0) goto out;
+    if (swd_mem_write32(ctx, SIM3U_FLASH_WRDATA, 0x00000000u) != 0) {
+        goto out;
+    }
+    if (flash_busy_wait(ctx) != 0) {
+        goto out;
+    }
 
     ret = 0;
 
 out:
     /* On failure the key may still be armed from KEY_INITIAL/KEY_SINGLE;
        re-lock so a stray WRDATA write cannot trigger an erase */
-    if (ret != 0)
+    if (ret != 0) {
         swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_LOCK);
+    }
     swd_mem_write32(ctx, SIM3U_FLASH_CONFIG_CLR, SIM3U_FLASH_CONFIG_ERASEEN);
     return ret;
 }
 
 int sim3u_erase(swd_ctx_t *ctx, uint32_t size)
 {
-    uint32_t num_pages = (size + SIM3U_FLASH_PAGE_SIZE - 1) / SIM3U_FLASH_PAGE_SIZE;
+    uint32_t num_pages =
+        (size + SIM3U_FLASH_PAGE_SIZE - 1) / SIM3U_FLASH_PAGE_SIZE;
     printf("[*] Erasing %u page(s)...\n", num_pages);
 
     for (uint32_t page = 0; page < num_pages; page++) {
         uint32_t addr = SIM3U_FLASH_BASE + page * SIM3U_FLASH_PAGE_SIZE;
         if (erase_page(ctx, addr) != 0) {
-            fprintf(stderr, "[!] Erase failed at page %u (0x%08x)\n", page, addr);
+            fprintf(stderr, "[!] Erase failed at page %u (0x%08x)\n", page,
+                    addr);
             return -1;
         }
         if ((page & 0xF) == 0 || page == num_pages - 1) {
@@ -88,15 +123,23 @@ int sim3u_write(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
     uint32_t hw_count = (size + 1) / 2;
     printf("[*] Writing %u bytes (%u halfwords)...\n", size, hw_count);
 
-    if (flash_busy_wait(ctx) != 0) return -1;
+    if (flash_busy_wait(ctx) != 0) {
+        return -1;
+    }
 
     /* Arm for multiple sequential writes */
-    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_INITIAL) != 0) return -1;
-    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_MULTIPLE) != 0) return -1;
+    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_INITIAL) != 0) {
+        return -1;
+    }
+    if (swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_MULTIPLE) != 0) {
+        return -1;
+    }
 
     /* WRADDR is written once: in multiple-write mode the controller
        auto-increments it after every WRDATA write. */
-    if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, SIM3U_FLASH_BASE) != 0) return -1;
+    if (swd_mem_write32(ctx, SIM3U_FLASH_WRADDR, SIM3U_FLASH_BASE) != 0) {
+        return -1;
+    }
 
     enum { WRITE_CHUNK_HW = 256 };
     uint32_t chunk[WRITE_CHUNK_HW];
@@ -104,13 +147,15 @@ int sim3u_write(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
     int ret = 0;
     for (uint32_t i = 0; i < hw_count; i += WRITE_CHUNK_HW) {
         uint32_t n = hw_count - i;
-        if (n > WRITE_CHUNK_HW) n = WRITE_CHUNK_HW;
+        if (n > WRITE_CHUNK_HW) {
+            n = WRITE_CHUNK_HW;
+        }
 
         for (uint32_t j = 0; j < n; j++) {
             uint32_t k = i + j;
-            chunk[j] = (2 * k + 1 < size)
-                ? (uint32_t)data[2 * k] | ((uint32_t)data[2 * k + 1] << 8)
-                : (uint32_t)data[2 * k] | 0xFF00u;
+            chunk[j] = (2 * k + 1 < size) ? (uint32_t)data[2 * k] |
+                                                ((uint32_t)data[2 * k + 1] << 8)
+                                          : (uint32_t)data[2 * k] | 0xFF00u;
         }
 
         /* The flash controller holds the bus while a halfword programs, so
@@ -124,7 +169,9 @@ int sim3u_write(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
         fflush(stdout);
     }
 
-    if (ret == 0) ret = flash_busy_wait(ctx);
+    if (ret == 0) {
+        ret = flash_busy_wait(ctx);
+    }
 
     /* Always lock; a failed lock write leaves flash writable, so report it */
     int lock_ret = swd_mem_write32(ctx, SIM3U_FLASH_KEY, SIM3U_FLASH_KEY_LOCK);
@@ -144,18 +191,22 @@ int sim3u_write(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
 
 int sim3u_verify(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
 {
-    enum { VERIFY_CHUNK_WORDS = 256 };  /* 1 KB per block read */
+    enum { VERIFY_CHUNK_WORDS = 256 }; /* 1 KB per block read */
     uint32_t words[VERIFY_CHUNK_WORDS];
 
     printf("[*] Verifying %u bytes...\n", size);
 
     for (uint32_t off = 0; off < size; off += sizeof(words)) {
         uint32_t bytes = size - off;
-        if (bytes > sizeof(words)) bytes = sizeof(words);
+        if (bytes > sizeof(words)) {
+            bytes = sizeof(words);
+        }
         uint32_t count = (bytes + 3) / 4;
 
-        if (swd_mem_read_block(ctx, SIM3U_FLASH_BASE + off, words, count) != 0)
+        if (swd_mem_read_block(ctx, SIM3U_FLASH_BASE + off, words, count) !=
+            0) {
             return -1;
+        }
 
         for (uint32_t w = 0; w < count; w++) {
             uint32_t i = off + w * 4;
@@ -164,7 +215,9 @@ int sim3u_verify(swd_ctx_t *ctx, const uint8_t *data, uint32_t size)
             memcpy(&expected, data + i, n);
 
             if (words[w] != expected) {
-                fprintf(stderr, "[!] Verify mismatch at 0x%08x: got 0x%08x expected 0x%08x\n",
+                fprintf(stderr,
+                        "[!] Verify mismatch at 0x%08x: got 0x%08x expected "
+                        "0x%08x\n",
                         SIM3U_FLASH_BASE + i, words[w], expected);
                 return -1;
             }

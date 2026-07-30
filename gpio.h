@@ -18,19 +18,19 @@
  * costs nothing in the hot path. */
 
 typedef struct {
-    volatile uint32_t *set;   /* write mask -> pin high */
-    volatile uint32_t *clr;   /* write mask -> pin low */
-    volatile uint32_t *in;    /* read -> pin levels; doubles as write barrier */
-    volatile uint32_t *oe;    /* direction, output (see dir_rmw) */
-    volatile uint32_t *od;    /* direction, input  (see dir_rmw) */
+    volatile uint32_t *set; /* write mask -> pin high */
+    volatile uint32_t *clr; /* write mask -> pin low */
+    volatile uint32_t *in; /* read -> pin levels; doubles as write barrier */
+    volatile uint32_t *oe; /* direction, output (see dir_rmw) */
+    volatile uint32_t *od; /* direction, input  (see dir_rmw) */
     uint32_t mask;
-    int      bit;
-    int      dir_rmw;         /* 1: oe == od, a r/w register where 1 = output
-                                 0: oe/od are write-1-to-act registers */
+    int bit;
+    int dir_rmw; /* 1: oe == od, a r/w register where 1 = output
+                    0: oe/od are write-1-to-act registers */
 
     /* Backend bookkeeping, not used in the hot path */
-    volatile uint32_t *port;  /* register block this pin lives in */
-    int      was_muxed;       /* pin was owned by a peripheral at open time */
+    volatile uint32_t *port; /* register block this pin lives in */
+    int was_muxed; /* pin was owned by a peripheral at open time */
 } gpio_pin_t;
 
 typedef struct {
@@ -39,17 +39,23 @@ typedef struct {
 
     /* private */
     const struct gpio_soc *soc;
-    void      *map;
-    size_t     maplen;
-    char       desc[64];
+    void *map;
+    size_t maplen;
+    char desc[64];
 } gpio_t;
 
-/* ------------------------------------------------------------------ */
-/* Hot path                                                            */
-/* ------------------------------------------------------------------ */
+/*
+ * Hot path
+ */
 
-static inline void gpio_set(const gpio_pin_t *p) { *p->set = p->mask; }
-static inline void gpio_clr(const gpio_pin_t *p) { *p->clr = p->mask; }
+static inline void gpio_set(const gpio_pin_t *p)
+{
+    *p->set = p->mask;
+}
+static inline void gpio_clr(const gpio_pin_t *p)
+{
+    *p->clr = p->mask;
+}
 
 static inline void gpio_put(const gpio_pin_t *p, int high)
 {
@@ -58,7 +64,10 @@ static inline void gpio_put(const gpio_pin_t *p, int high)
 
 /* Read-back of the pin register: flushes the posted write and provides the
    setup/hold delay between edges */
-static inline void gpio_sync(const gpio_pin_t *p) { (void)*p->in; }
+static inline void gpio_sync(const gpio_pin_t *p)
+{
+    (void)*p->in;
+}
 
 static inline int gpio_get(const gpio_pin_t *p)
 {
@@ -68,22 +77,25 @@ static inline int gpio_get(const gpio_pin_t *p)
 static inline void gpio_dir(const gpio_pin_t *p, int output)
 {
     if (p->dir_rmw) {
-        if (output) *p->oe |=  p->mask;
-        else        *p->oe &= ~p->mask;
+        if (output) {
+            *p->oe |= p->mask;
+        } else {
+            *p->oe &= ~p->mask;
+        }
     } else {
         *(output ? p->oe : p->od) = p->mask;
     }
     gpio_sync(p);
 }
 
-/* ------------------------------------------------------------------ */
-/* Setup / teardown                                                    */
-/* ------------------------------------------------------------------ */
+/*
+ * Setup / teardown
+ */
 
 /* Map the host SoC's GPIO block and claim the SWCLK/SWDIO pins.  The SoC is
    auto-detected; SWD_SOC, SWD_SWCLK and SWD_SWDIO override.  Both pins are
    left as inputs.  Returns 0 on success. */
-int  gpio_open(gpio_t *g);
+int gpio_open(gpio_t *g);
 
 /* Release the pins (back to input, and back to their peripheral if they were
    muxed to one) and unmap */
