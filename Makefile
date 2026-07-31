@@ -15,7 +15,7 @@ CLANG_TIDY   ?= clang-tidy
 TARGET = sim3u-flasher
 OBJDIR = build
 
-SRCS = main.c swd.c gpio.c sim3u_flash.c
+SRCS = main.c swd.c gpio.c gpio_mt7688.c gpio_at91sam9x5.c sim3u_flash.c
 OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
 
 .PHONY: all clean format format-check lint check
