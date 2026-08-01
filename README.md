@@ -54,3 +54,11 @@ sim3u-flasher [options] <firmware.bin>
 
 Config is picked up automatically from `.clang-format` and `.clang-tidy`
 in this directory.
+
+## Tests
+
+`make test` runs the flasher against an emulated SWD target, with no
+hardware attached.
+
+`./test-on-gateway.sh <gateway>` covers what the emulator cannot: the
+`/dev/mem` mapping, the host GPIO backends and the real target's timing.

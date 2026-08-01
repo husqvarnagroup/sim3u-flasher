@@ -41,6 +41,46 @@
 
 #define TARGET_IDCODE 0x2BA01477u
 
+/* The device's own register map, spelled out rather than taken from
+   sim3u_flash.h.  An emulator that imports the addresses it is being driven
+   with cannot notice one of them being wrong. */
+#define FLASH_SIZE (256u * 1024u)
+#define FLASH_PAGE 1024u
+
+#define REG_FLASH_CONFIG_ALL 0x4002E000u
+#define REG_FLASH_CONFIG_SET 0x4002E004u
+#define REG_FLASH_CONFIG_CLR 0x4002E008u
+#define REG_FLASH_WRADDR 0x4002E0A0u
+#define REG_FLASH_WRDATA 0x4002E0B0u
+#define REG_FLASH_KEY 0x4002E0C0u
+#define REG_DHCSR 0xE000EDF0u
+
+#define CONFIG_ERASEEN 0x00040000u
+#define CONFIG_BUSYF 0x00100000u
+
+#define KEY_INITIAL 0xA5u
+#define KEY_SINGLE 0xF1u
+#define KEY_MULTIPLE 0xF2u
+#define KEY_LOCK 0x5Au
+
+#define DHCSR_C_HALT (1u << 1)
+#define DHCSR_S_HALT (1u << 17)
+
+/* MEM-AP register addresses within bank 0 */
+#define MEMAP_CSW 0x00u
+#define MEMAP_TAR 0x04u
+#define MEMAP_DRW 0x0Cu
+
+/* CSW[5:4], the address auto-increment field */
+#define CSW_ADDRINC(csw) (((csw) >> 4) & 3u)
+
+enum key_state {
+    KEY_LOCKED,
+    KEY_STARTED, /* KEY_INITIAL seen */
+    KEY_ONE_SHOT, /* armed for a single erase or write */
+    KEY_STREAM, /* armed until locked again */
+};
+
 enum target_state {
     STATE_UNSYNCED, /* nothing sensible seen yet */
     STATE_RESET, /* line reset seen, waiting for it to end */
@@ -71,8 +111,21 @@ static struct {
 
     uint32_t ctrl_stat;
     uint32_t select;
+
+    /* MEM-AP */
     uint32_t csw;
+    uint32_t tar;
+    uint32_t rdbuff; /* the posted read waiting to be collected */
+
+    /* Flash controller */
+    uint32_t config;
+    uint32_t wraddr;
+    enum key_state key;
+
+    uint32_t dhcsr;
 } tgt;
+
+static uint8_t flash[FLASH_SIZE];
 
 static int parity32(uint32_t v)
 {
@@ -85,19 +138,167 @@ static int parity32(uint32_t v)
 }
 
 /*
- * Registers
+ * Flash controller
  */
+
+/* A key sequence arms the controller for one operation or for a stream of
+   them.  Anything unexpected, KEY_LOCK included, locks it again. */
+static void flash_key(uint32_t val)
+{
+    if (val == KEY_INITIAL) {
+        tgt.key = KEY_STARTED;
+    } else if (val == KEY_SINGLE && tgt.key == KEY_STARTED) {
+        tgt.key = KEY_ONE_SHOT;
+    } else if (val == KEY_MULTIPLE && tgt.key == KEY_STARTED) {
+        tgt.key = KEY_STREAM;
+    } else {
+        tgt.key = KEY_LOCKED;
+    }
+}
+
+/* Programming can only clear bits, which is what erasing exists to undo.  A
+   run that writes without erasing first therefore fails to verify, exactly as
+   the part would. */
+static void flash_wrdata(uint32_t val)
+{
+    if (tgt.key != KEY_ONE_SHOT && tgt.key != KEY_STREAM) {
+        return;
+    }
+
+    if (tgt.config & CONFIG_ERASEEN) {
+        uint32_t page = tgt.wraddr & ~(FLASH_PAGE - 1u);
+        if (page + FLASH_PAGE <= FLASH_SIZE) {
+            memset(&flash[page], 0xFF, FLASH_PAGE);
+        }
+    } else if (tgt.wraddr + 1 < FLASH_SIZE) {
+        flash[tgt.wraddr] &= (uint8_t)(val & 0xFFu);
+        flash[tgt.wraddr + 1] &= (uint8_t)((val >> 8) & 0xFFu);
+        /* WRADDR walks forward on its own in multiple-write mode */
+        tgt.wraddr += 2;
+    }
+
+    if (tgt.key == KEY_ONE_SHOT) {
+        tgt.key = KEY_LOCKED;
+    }
+}
+
+/*
+ * Memory
+ */
+
+static uint32_t mem_read(uint32_t addr)
+{
+    if (addr + 3 < FLASH_SIZE) {
+        uint32_t val;
+        memcpy(&val, &flash[addr], sizeof(val));
+        return val;
+    }
+    switch (addr) {
+    case REG_FLASH_CONFIG_ALL:
+        /* Never busy: the emulated flash programs instantly */
+        return tgt.config & ~CONFIG_BUSYF;
+    case REG_FLASH_WRADDR:
+        return tgt.wraddr;
+    case REG_DHCSR:
+        return tgt.dhcsr | ((tgt.dhcsr & DHCSR_C_HALT) ? DHCSR_S_HALT : 0);
+    default:
+        return 0;
+    }
+}
+
+static void mem_write(uint32_t addr, uint32_t val)
+{
+    switch (addr) {
+    case REG_FLASH_CONFIG_SET:
+        tgt.config |= val;
+        break;
+    case REG_FLASH_CONFIG_CLR:
+        tgt.config &= ~val;
+        break;
+    case REG_FLASH_WRADDR:
+        tgt.wraddr = val;
+        break;
+    case REG_FLASH_KEY:
+        flash_key(val);
+        break;
+    case REG_FLASH_WRDATA:
+        flash_wrdata(val);
+        break;
+    case REG_DHCSR:
+        tgt.dhcsr = val;
+        break;
+    default:
+        /* Flash is not writable through the MEM-AP, and the watchdog and
+           clock registers only have to accept what sim3u_init sends */
+        break;
+    }
+}
+
+/*
+ * DP and AP registers
+ */
+
+/* Auto-increment is only architecturally guaranteed across the bottom 10
+   address bits, and a real MEM-AP wraps inside that window rather than
+   carrying into the bits above it.  Modelling the wrap is what makes a
+   caller that fails to rewrite TAR every 1 KB read the wrong words. */
+static void tar_advance(void)
+{
+    if (CSW_ADDRINC(tgt.csw)) {
+        tgt.tar = (tgt.tar & ~0x3FFu) | ((tgt.tar + 4) & 0x3FFu);
+    }
+}
+
+static uint32_t read_ap(uint8_t addr)
+{
+    switch (addr) {
+    case MEMAP_CSW:
+        return tgt.csw;
+    case MEMAP_TAR:
+        return tgt.tar;
+    case MEMAP_DRW: {
+        /* Reads are posted: this returns the previous one and starts a new
+           one, which the host collects from RDBUFF or the next read */
+        uint32_t posted = tgt.rdbuff;
+        tgt.rdbuff = mem_read(tgt.tar);
+        tar_advance();
+        return posted;
+    }
+    default:
+        return 0;
+    }
+}
+
+static void write_ap(uint8_t addr, uint32_t val)
+{
+    switch (addr) {
+    case MEMAP_CSW:
+        tgt.csw = val;
+        break;
+    case MEMAP_TAR:
+        tgt.tar = val;
+        break;
+    case MEMAP_DRW:
+        mem_write(tgt.tar, val);
+        tar_advance();
+        break;
+    default:
+        break;
+    }
+}
 
 static uint32_t read_reg(int apndp, uint8_t addr)
 {
     if (apndp) {
-        return addr == AP_CSW ? tgt.csw : 0;
+        return read_ap(addr);
     }
     switch (addr) {
     case DP_IDCODE:
         return TARGET_IDCODE;
     case DP_CTRL:
         return tgt.ctrl_stat;
+    case DP_RDBUFF:
+        return tgt.rdbuff;
     default:
         return 0;
     }
@@ -106,9 +307,7 @@ static uint32_t read_reg(int apndp, uint8_t addr)
 static void write_reg(int apndp, uint8_t addr, uint32_t val)
 {
     if (apndp) {
-        if (addr == AP_CSW) {
-            tgt.csw = val;
-        }
+        write_ap(addr, val);
         return;
     }
     switch (addr) {
@@ -316,6 +515,10 @@ int gpio_open(gpio_t *g)
     g->clk.bit = PIN_CLK;
     g->dio.bit = PIN_DIO;
     tgt.state = STATE_UNSYNCED;
+
+    /* Deliberately not 0xFF: flash comes up holding something, so a run that
+       skips the erase cannot go on to verify */
+    memset(flash, 0x5A, sizeof(flash));
 
     memcpy(g->desc, "emulated SiM3U167", sizeof("emulated SiM3U167"));
     return 0;
