@@ -19,12 +19,16 @@
  * has no effect and the wire is always electrically perfect.
  *
  * The target never answers WAIT or FAULT.  Those paths, and the retry budget
- * built for them, remain hardware-only. */
+ * built for them, remain hardware-only.
+ *
+ * SWD_MOCK_IDCODE makes it report an IDCODE other than the SiM3U167's, which
+ * nothing else provokes. */
 
 #include "gpio.h"
 #include "swd.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PIN_CLK 0
@@ -123,6 +127,7 @@ static struct {
     enum key_state key;
 
     uint32_t dhcsr;
+    uint32_t idcode;
 } tgt;
 
 static uint8_t flash[FLASH_SIZE];
@@ -294,7 +299,7 @@ static uint32_t read_reg(int apndp, uint8_t addr)
     }
     switch (addr) {
     case DP_IDCODE:
-        return TARGET_IDCODE;
+        return tgt.idcode;
     case DP_CTRL:
         return tgt.ctrl_stat;
     case DP_RDBUFF:
@@ -507,6 +512,12 @@ void gpio_dir(const gpio_pin_t *p, int output)
  * Setup / teardown
  */
 
+static unsigned long env_num(const char *name, unsigned long def)
+{
+    const char *val = getenv(name);
+    return val ? strtoul(val, NULL, 0) : def;
+}
+
 int gpio_open(gpio_t *g)
 {
     memset(g, 0, sizeof(*g));
@@ -515,6 +526,7 @@ int gpio_open(gpio_t *g)
     g->clk.bit = PIN_CLK;
     g->dio.bit = PIN_DIO;
     tgt.state = STATE_UNSYNCED;
+    tgt.idcode = (uint32_t)env_num("SWD_MOCK_IDCODE", TARGET_IDCODE);
 
     /* Deliberately not 0xFF: flash comes up holding something, so a run that
        skips the erase cannot go on to verify */
