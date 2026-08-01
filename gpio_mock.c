@@ -18,11 +18,15 @@
  * which is where swd.c samples.  Nothing models setup or hold, so SWD_DELAY
  * has no effect and the wire is always electrically perfect.
  *
- * The target never answers WAIT or FAULT.  Those paths, and the retry budget
- * built for them, remain hardware-only.
+ * Three environment variables bend the target's behaviour so the error paths
+ * can be reached, since nothing else provokes them:
  *
- * SWD_MOCK_IDCODE makes it report an IDCODE other than the SiM3U167's, which
- * nothing else provokes. */
+ *   SWD_MOCK_IDCODE      report this IDCODE instead of the SiM3U167's
+ *   SWD_MOCK_WAIT_EVERY  answer every Nth transfer with WAIT
+ *   SWD_MOCK_FAULT_AT    answer the Nth transfer with FAULT
+ *
+ * A WAIT is backpressure the host is expected to ride out, so a run with
+ * WAIT injection still has to finish; a FAULT is not, so it must not. */
 
 #include "gpio.h"
 #include "swd.h"
@@ -127,7 +131,12 @@ static struct {
     enum key_state key;
 
     uint32_t dhcsr;
+
+    /* Fault injection */
     uint32_t idcode;
+    unsigned long transfers;
+    unsigned long wait_every;
+    unsigned long fault_at;
 } tgt;
 
 static uint8_t flash[FLASH_SIZE];
@@ -346,15 +355,28 @@ static void queue_bit(int bit)
 }
 
 /* One turnaround bit the host discards, then the ack, least significant
-   first.  Every request this target understands is answered OK. */
-static void queue_ack(void)
+   first */
+static void queue_ack(int ack)
 {
     tgt.out_len = 0;
     tgt.out_pos = 0;
     queue_bit(0);
     for (int i = 0; i < 3; i++) {
-        queue_bit((SWD_ACK_OK >> i) & 1);
+        queue_bit((ack >> i) & 1);
     }
+}
+
+/* WAIT and FAULT both end the transfer after the ack, with no data phase */
+static int injected_ack(void)
+{
+    tgt.transfers++;
+    if (tgt.fault_at && tgt.transfers == tgt.fault_at) {
+        return SWD_ACK_FAULT;
+    }
+    if (tgt.wait_every && tgt.transfers % tgt.wait_every == 0) {
+        return SWD_ACK_WAIT;
+    }
+    return SWD_ACK_OK;
 }
 
 static void queue_word(uint32_t val)
@@ -390,7 +412,11 @@ static void handle_request(void)
         return;
     }
 
-    queue_ack();
+    int ack = injected_ack();
+    queue_ack(ack);
+    if (ack != SWD_ACK_OK) {
+        return;
+    }
 
     if (rnw) {
         queue_word(read_reg(apndp, addr));
@@ -527,6 +553,8 @@ int gpio_open(gpio_t *g)
     g->dio.bit = PIN_DIO;
     tgt.state = STATE_UNSYNCED;
     tgt.idcode = (uint32_t)env_num("SWD_MOCK_IDCODE", TARGET_IDCODE);
+    tgt.wait_every = env_num("SWD_MOCK_WAIT_EVERY", 0);
+    tgt.fault_at = env_num("SWD_MOCK_FAULT_AT", 0);
 
     /* Deliberately not 0xFF: flash comes up holding something, so a run that
        skips the erase cannot go on to verify */
