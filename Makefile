@@ -18,7 +18,11 @@ OBJDIR = build
 SRCS = main.c swd.c gpio.c gpio_mt7688.c gpio_at91sam9x5.c sim3u_flash.c
 OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(SRCS))
 
-.PHONY: all clean format format-check lint check
+# The real tool against an emulated target, with no GPIO layer under it
+MOCK = $(OBJDIR)/sim3u-flasher-test
+MOCK_SRCS = main.c swd.c sim3u_flash.c gpio_mock.c
+
+.PHONY: all clean format format-check lint test check
 
 all: $(TARGET)
 
@@ -43,7 +47,16 @@ format:
 format-check:
 	$(CLANG_FORMAT) --dry-run --Werror *.c *.h
 
+# gpio_mock.c replaces the accessors gpio.h defines inline, so it only makes
+# sense to a compiler that has GPIO_MOCK set
 lint:
-	$(CLANG_TIDY) *.c -- -I. -std=gnu11
+	$(CLANG_TIDY) $(SRCS) -- -I. -std=gnu11
+	$(CLANG_TIDY) gpio_mock.c -- -I. -std=gnu11 -DGPIO_MOCK
+
+$(MOCK): $(MOCK_SRCS) | $(OBJDIR)
+	$(CC) $(CFLAGS) -DGPIO_MOCK -I. $(MOCK_SRCS) -o $@
+
+test: $(MOCK)
+	./test.sh $(MOCK)
 
 check: format-check lint

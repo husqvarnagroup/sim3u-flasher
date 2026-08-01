@@ -48,6 +48,19 @@ typedef struct {
  * Hot path
  */
 
+#ifdef GPIO_MOCK
+
+/* Out of line, so a test can put a SWD target on the other end of the wire
+   instead of /dev/mem.  Only test builds define GPIO_MOCK; see gpio_mock.c. */
+void gpio_set(const gpio_pin_t *p);
+void gpio_clr(const gpio_pin_t *p);
+void gpio_put(const gpio_pin_t *p, int high);
+void gpio_sync(const gpio_pin_t *p);
+int gpio_get(const gpio_pin_t *p);
+void gpio_dir(const gpio_pin_t *p, int output);
+
+#else
+
 static inline void gpio_set(const gpio_pin_t *p)
 {
     *p->set = p->mask;
@@ -87,6 +100,8 @@ static inline void gpio_dir(const gpio_pin_t *p, int output)
     }
     gpio_sync(p);
 }
+
+#endif /* GPIO_MOCK */
 
 /*
  * Setup / teardown
